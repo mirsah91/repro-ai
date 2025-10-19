@@ -1,0 +1,24 @@
+[project]
+name = "repro_ai_service"
+version = "0.1.0"
+description = "AI-powered session summarization and chat service"
+authors = ["Example <example@example.com>"]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "pymongo>=4.6.0",
+    "pydantic>=2.6.0",
+    "python-dotenv>=1.0.0",
+    "openai>=1.14.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0"
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
