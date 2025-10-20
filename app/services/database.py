@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Sequence, Tuple
@@ -10,6 +11,7 @@ from bson.errors import InvalidId
 from bson.objectid import ObjectId
 from pymongo import MongoClient
 from pymongo.collection import Collection
+from pymongo.errors import PyMongoError
 
 from app.models.session import SessionDocument
 from app.services.settings import settings
@@ -25,6 +27,8 @@ class SessionLookupResult:
     matched_collections: Tuple[str, ...]
     fallback_collections: Tuple[str, ...]
     fallback_documents_scanned: int
+    connection_ok: bool
+    collection_samples: Tuple[Tuple[str, Tuple[str, ...]], ...]
 
 
 class MongoSessionRepository:
@@ -35,11 +39,21 @@ class MongoSessionRepository:
         client: MongoClient | None = None,
         session_id_fields: Sequence[str] | None = None,
     ) -> None:
-        self._client = client or MongoClient(settings.mongo_uri)
+        self._logger = logging.getLogger(__name__)
+        self._uri_description = self._mask_uri(settings.mongo_uri)
+        if client is None:
+            self._client = MongoClient(settings.mongo_uri)
+        else:
+            self._client = client
+            # When a client is injected (e.g. tests), avoid leaking configuration
+            # details and use a synthetic description.
+            self._uri_description = "<injected MongoClient>"
+
         self._db = self._client[settings.mongo_db]
         if session_id_fields is None:
             session_id_fields = settings.session_id_fields
         self._session_id_fields: tuple[str, ...] = tuple(session_id_fields)
+        self._connection_ok = self._check_connection()
 
     def fetch_session_documents(self, session_id: str) -> SessionLookupResult:
         documents: List[SessionDocument] = []
@@ -50,12 +64,37 @@ class MongoSessionRepository:
         candidate_values = self._candidate_session_values(session_id)
         query = self._build_session_query(session_id, candidate_values=candidate_values)
 
-        for collection_name in self._iter_collection_names():
+        connection_ok = self._check_connection()
+        self._connection_ok = connection_ok
+        self._logger.info(
+            "Fetching session '%s' using fields %s (connection_ok=%s)",
+            session_id,
+            ", ".join(self._session_id_fields) or "<none>",
+            connection_ok,
+        )
+
+        collection_names = tuple(self._iter_collection_names())
+        if not collection_names:
+            self._logger.warning(
+                "No collections discovered in MongoDB database '%s'", self._db.name
+            )
+
+        for collection_name in collection_names:
             scanned_collections.append(collection_name)
             collection = self._db[collection_name]
             matched = False
 
-            for raw_document in collection.find(query):
+            try:
+                cursor = collection.find(query)
+            except PyMongoError:
+                self._logger.exception(
+                    "Query failed for collection '%s' when searching for session '%s'",
+                    collection_name,
+                    session_id,
+                )
+                cursor = []
+
+            for raw_document in cursor:
                 matched = True
                 matched_collections.add(collection_name)
                 documents.append(
@@ -66,9 +105,17 @@ class MongoSessionRepository:
                 )
 
             if not matched and settings.enable_fallback_scan:
-                fallback_matches, scanned_count = self._scan_collection_for_session(
-                    collection, candidate_values
-                )
+                try:
+                    fallback_matches, scanned_count = self._scan_collection_for_session(
+                        collection, candidate_values
+                    )
+                except PyMongoError:
+                    self._logger.exception(
+                        "Fallback scan failed for collection '%s' when searching for session '%s'",
+                        collection_name,
+                        session_id,
+                    )
+                    continue
                 fallback_documents_scanned += scanned_count
                 if fallback_matches:
                     matched_collections.add(collection_name)
@@ -81,6 +128,10 @@ class MongoSessionRepository:
                             )
                         )
 
+        collection_samples: Tuple[Tuple[str, Tuple[str, ...]], ...] = tuple()
+        if not documents:
+            collection_samples = self._collect_collection_documents(collection_names)
+
         return SessionLookupResult(
             session_id=session_id,
             documents=documents,
@@ -90,6 +141,8 @@ class MongoSessionRepository:
             matched_collections=tuple(sorted(matched_collections)),
             fallback_collections=tuple(sorted(fallback_collections)),
             fallback_documents_scanned=fallback_documents_scanned,
+            connection_ok=connection_ok,
+            collection_samples=collection_samples,
         )
 
     def _build_session_query(
@@ -100,7 +153,17 @@ class MongoSessionRepository:
         )
 
     def _iter_collection_names(self) -> Iterable[str]:
-        for name in self._db.list_collection_names():
+        try:
+            collection_names = self._db.list_collection_names()
+        except PyMongoError:
+            self._logger.exception(
+                "Failed to list MongoDB collections for %s/%s",
+                self._uri_description,
+                self._db.name,
+            )
+            return
+
+        for name in collection_names:
             # system collections are ignored because they do not store business data
             if name.startswith("system."):
                 continue
@@ -238,3 +301,89 @@ class MongoSessionRepository:
     @staticmethod
     def describe_candidate(candidate: Any) -> str:
         return json_util.dumps(candidate, ensure_ascii=False)
+
+    def _check_connection(self) -> bool:
+        try:
+            self._client.admin.command("ping")
+        except PyMongoError:
+            self._logger.exception(
+                "MongoDB ping failed for %s/%s",
+                self._uri_description,
+                self._db.name,
+            )
+            return False
+
+        self._logger.info(
+            "MongoDB ping succeeded for %s/%s",
+            self._uri_description,
+            self._db.name,
+        )
+        return True
+
+    def _collect_collection_documents(
+        self, collection_names: Sequence[str]
+    ) -> Tuple[Tuple[str, Tuple[str, ...]], ...]:
+        samples: list[Tuple[str, Tuple[str, ...]]] = []
+        for collection_name in collection_names:
+            collection = self._db[collection_name]
+            try:
+                estimated = collection.estimated_document_count()
+            except PyMongoError:
+                self._logger.exception(
+                    "Unable to estimate document count for collection '%s'", collection_name
+                )
+                estimated = None
+            else:
+                self._logger.info(
+                    "Collection '%s' estimated document count: %s",
+                    collection_name,
+                    estimated,
+                )
+
+            try:
+                documents = list(collection.find())
+            except PyMongoError:
+                self._logger.exception(
+                    "Unable to fetch documents from collection '%s' for debugging",
+                    collection_name,
+                )
+                continue
+
+            self._logger.info(
+                "Fetched %d document(s) from collection '%s' for debugging",
+                len(documents),
+                collection_name,
+            )
+
+            if estimated is not None and estimated > len(documents):
+                self._logger.warning(
+                    "Collection '%s' returned fewer documents (%d) than its estimate (%d)",
+                    collection_name,
+                    len(documents),
+                    estimated,
+                )
+
+            stringified = tuple(self._stringify_document(document) for document in documents)
+            for index, payload in enumerate(stringified, start=1):
+                self._logger.debug(
+                    "Collection '%s' document %d contents: %s",
+                    collection_name,
+                    index,
+                    payload,
+                )
+
+            samples.append((collection_name, stringified))
+
+        return tuple(samples)
+
+    @staticmethod
+    def _mask_uri(uri: str) -> str:
+        if "@" not in uri:
+            return uri
+        prefix, suffix = uri.split("@", 1)
+        if "//" in prefix:
+            scheme, _ = prefix.split("//", 1)
+            masked_prefix = f"{scheme}//***"
+        else:
+            masked_prefix = "***"
+        return f"{masked_prefix}@{suffix}"

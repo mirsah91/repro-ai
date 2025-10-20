@@ -77,10 +77,15 @@ class SessionAIService:
                         self._repository.describe_candidate(candidate)
                         for candidate in lookup.candidate_values
                     ],
+                    "mongo_connection_ok": lookup.connection_ok,
                     "collections_scanned": list(lookup.scanned_collections),
                     "fallback_scan_enabled": settings.enable_fallback_scan,
                     "fallback_documents_scanned": lookup.fallback_documents_scanned,
                     "fallback_collections": list(lookup.fallback_collections),
+                    "collection_documents": {
+                        name: list(documents)
+                        for name, documents in lookup.collection_samples
+                    },
                 },
             )
         return self._truncate_documents(lookup.documents), lookup
