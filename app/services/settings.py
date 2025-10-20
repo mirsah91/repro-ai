@@ -16,6 +16,8 @@ class Settings:
     openai_api_key: str | None = os.environ.get("OPENAI_API_KEY")
     openai_model: str = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     session_id_fields: List[str] = field(default_factory=list)
+    enable_fallback_scan: bool = True
+    fallback_scan_limit: int = 1000
 
     def __post_init__(self) -> None:
         configured = os.environ.get("SESSION_ID_FIELDS")
@@ -26,6 +28,25 @@ class Settings:
         else:
             # Default to common naming conventions supported out of the box
             self.session_id_fields = ["sessionId", "session_id"]
+
+        fallback_scan_flag = os.environ.get("ENABLE_SESSION_FALLBACK_SCAN")
+        if fallback_scan_flag is not None:
+            self.enable_fallback_scan = fallback_scan_flag.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+
+        fallback_scan_limit = os.environ.get("SESSION_FALLBACK_SCAN_LIMIT")
+        if fallback_scan_limit:
+            try:
+                parsed_limit = int(fallback_scan_limit)
+            except ValueError:
+                parsed_limit = self.fallback_scan_limit
+            else:
+                if parsed_limit > 0:
+                    self.fallback_scan_limit = parsed_limit
 
 
 settings = Settings()

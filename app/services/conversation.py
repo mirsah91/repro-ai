@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import secrets
 from collections import defaultdict
-from typing import DefaultDict, List
+from typing import Any, DefaultDict, Dict, List
 
 
 class ConversationStore:
@@ -10,6 +10,7 @@ class ConversationStore:
 
     def __init__(self) -> None:
         self._store: DefaultDict[str, List[dict[str, str]]] = defaultdict(list)
+        self.metadata: Dict[str, dict[str, Any]] = {}
 
     def generate_id(self) -> str:
         return secrets.token_hex(8)
