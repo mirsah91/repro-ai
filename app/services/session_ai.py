@@ -105,7 +105,7 @@ class SessionAIService:
                 if remaining <= 0:
                     break
                 content = content[:remaining]
-            truncated.append(SessionDocument(source=document.source, content=content))
+            truncated.append(document.model_copy(update={"content": content}))
             running_total += len(content)
             if running_total >= max_characters:
                 break

@@ -146,3 +146,44 @@ def test_iter_collection_names_respects_configured_collections():
     )
 
     assert list(repo._iter_collection_names()) == ["traces"]
+
+
+def test_format_documents_orders_batches_and_condenses_events():
+    collections = {"traces": _StubCollection("traces")}
+    repo = MongoSessionRepository(client=_StubClient(collections))
+
+    raw_documents = [
+        (
+            "traces",
+            {
+                "batchIndex": 2,
+                "requestRid": "rid-002",
+                "data": {
+                    "events": [
+                        {"type": "update", "status": "ok", "index": idx}
+                        for idx in range(6)
+                    ],
+                    "total": 6,
+                },
+            },
+        ),
+        (
+            "traces",
+            {
+                "batchIndex": 1,
+                "requestRid": "rid-001",
+                "data": {
+                    "events": [{"type": "create", "status": "start"}],
+                    "total": 1,
+                },
+            },
+        ),
+    ]
+
+    formatted = repo._format_documents(raw_documents)
+
+    assert [doc.batch_index for doc in formatted] == [1, 2]
+    assert formatted[0].event_preview == ["type=create, status=start"]
+    assert formatted[1].event_preview[-1] == "... 1 more event(s)"
+    assert formatted[1].total_events == 6
+    assert "<omitted 6 event(s)" in formatted[1].content

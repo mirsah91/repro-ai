@@ -58,13 +58,20 @@ class LLMClient:
     @staticmethod
     def _build_summary_prompt(session_id: str, documents: Iterable[SessionDocument]) -> str:
         document_text = "\n\n".join(
-            f"Source: {doc.source}\nContent: {doc.content}" for doc in documents
+            (
+                f"Source: {doc.source}\n"
+                f"Batch: {doc.batch_index if doc.batch_index is not None else 'n/a'}\n"
+                f"Content: {doc.content}"
+            )
+            for doc in documents
         )
         return (
-            "Summarize the following session. Highlight the most important events, decisions, "
-            "and code-related changes.\n\n"
+            "Create a concise Jira-ready summary for the session below. "
+            "Respond with a short title followed by up to three bullet points that capture the "
+            "critical actions, decisions, and blockers. Mention remaining questions or follow-up "
+            "items if needed and avoid unnecessary detail.\n\n"
             f"Session ID: {session_id}\n\n"
-            f"Session Documents:\n{document_text}"
+            f"Ordered Session Context:\n{document_text}"
         )
 
     @staticmethod
@@ -75,9 +82,10 @@ class LLMClient:
             f"Source: {doc.source}\nContent: {doc.content}" for doc in documents
         )
         return (
-            "You are given the aggregated records for a single session. "
+            "You are given the aggregated records for a single session in chronological batches. "
             "Answer the user's question using only this context. If the answer cannot be derived, "
-            "say that the information is not available.\n\n"
+            "say that the information is not available. Highlight batch numbers when they clarify "
+            "the answer.\n\n"
             f"Session ID: {session_id}\n"
             f"Question: {question}\n\n"
             f"Context:\n{document_text}"

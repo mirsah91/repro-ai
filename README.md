@@ -6,6 +6,8 @@ AI service providing session summarization and conversational insights over Mong
 
 - Summarize a session across multiple MongoDB collections using a single endpoint.
 - Conversational interface that answers arbitrary questions about the session data.
+- Automatically orders batched trace documents by `batchIndex`, merges them into a
+  chronological view, and condenses oversized event payloads before handing them to the LLM.
 - Modular design that separates data access, orchestration, and language model integrations.
 
 ## Getting started
@@ -36,6 +38,10 @@ pip install -e .
   is stored in unexpected fields or nested objects.
 - `SESSION_FALLBACK_SCAN_LIMIT` (optional, defaults to `1000`). Caps the number of
   documents scanned per collection during the fallback search.
+- `SESSION_EVENT_PREVIEW_COUNT` (optional, defaults to `5`). Controls how many events are
+  included in the condensed preview for each batch when `data.events` contains large arrays.
+- `SESSION_EVENT_PREVIEW_CHARS` (optional, defaults to `400`). Caps the length of each
+  preview line so extremely large event payloads do not overwhelm the prompt budget.
 
 If a session cannot be found, the API now returns a structured 404 response outlining
 the fields and collections that were checked, plus details about the fallback scan.
@@ -49,6 +55,16 @@ uvicorn app.main:app --reload
 ```
 
 The interactive API docs are available at `http://localhost:8000/docs`.
+
+### Handling large batched traces
+
+Session data stored in collections such as `traces` is often written in batches. The
+service retrieves every document that matches the session ID, sorts the records by
+`batchIndex`, and builds a chronological narrative for the language model. When
+`data.events` holds a very large JSON array, only the leading events (up to the configured
+preview count) are surfaced alongside a summary string indicating how many additional
+entries were omitted. This keeps prompts small enough for reliable LLM responses while
+retaining the most useful context for summarisation and follow-up questions.
 
 ## Project structure
 

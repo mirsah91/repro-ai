@@ -10,6 +10,18 @@ class SessionDocument(BaseModel):
 
     source: str = Field(..., description="Collection or logical source name")
     content: str = Field(..., description="Human-readable representation of the record")
+    batch_index: Optional[int] = Field(
+        default=None,
+        description="Order of the batch within the session, if available",
+    )
+    total_events: Optional[int] = Field(
+        default=None,
+        description="Number of events represented by this record, when known",
+    )
+    event_preview: List[str] = Field(
+        default_factory=list,
+        description="High level highlights extracted from large event payloads",
+    )
 
 
 class SessionSummaryResponse(BaseModel):

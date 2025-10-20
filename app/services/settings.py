@@ -19,6 +19,8 @@ class Settings:
     session_collections: List[str] = field(default_factory=list)
     enable_fallback_scan: bool = True
     fallback_scan_limit: int = 1000
+    session_event_preview_count: int = 5
+    session_event_preview_chars: int = 400
 
     def __post_init__(self) -> None:
         configured = os.environ.get("SESSION_ID_FIELDS")
@@ -54,6 +56,26 @@ class Settings:
             else:
                 if parsed_limit > 0:
                     self.fallback_scan_limit = parsed_limit
+
+        preview_count = os.environ.get("SESSION_EVENT_PREVIEW_COUNT")
+        if preview_count:
+            try:
+                parsed_count = int(preview_count)
+            except ValueError:
+                parsed_count = self.session_event_preview_count
+            else:
+                if parsed_count > 0:
+                    self.session_event_preview_count = parsed_count
+
+        preview_chars = os.environ.get("SESSION_EVENT_PREVIEW_CHARS")
+        if preview_chars:
+            try:
+                parsed_chars = int(preview_chars)
+            except ValueError:
+                parsed_chars = self.session_event_preview_chars
+            else:
+                if parsed_chars > 0:
+                    self.session_event_preview_chars = parsed_chars
 
 
 settings = Settings()

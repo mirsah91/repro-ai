@@ -61,7 +61,7 @@ class MongoSessionRepository:
         self._connection_ok = self._check_connection()
 
     def fetch_session_documents(self, session_id: str) -> SessionLookupResult:
-        documents: List[SessionDocument] = []
+        raw_documents: list[tuple[str, dict[str, Any]]] = []
         scanned_collections: list[str] = []
         matched_collections: set[str] = set()
         fallback_collections: set[str] = set()
@@ -102,12 +102,7 @@ class MongoSessionRepository:
             for raw_document in cursor:
                 matched = True
                 matched_collections.add(collection_name)
-                documents.append(
-                    SessionDocument(
-                        source=collection_name,
-                        content=self._stringify_document(raw_document),
-                    )
-                )
+                raw_documents.append((collection_name, raw_document))
 
             if not matched and settings.enable_fallback_scan:
                 try:
@@ -126,14 +121,11 @@ class MongoSessionRepository:
                     matched_collections.add(collection_name)
                     fallback_collections.add(collection_name)
                     for raw_document in fallback_matches:
-                        documents.append(
-                            SessionDocument(
-                                source=collection_name,
-                                content=self._stringify_document(raw_document),
-                            )
-                        )
+                        raw_documents.append((collection_name, raw_document))
 
         collection_samples: Tuple[Tuple[str, Tuple[str, ...]], ...] = tuple()
+        documents = self._format_documents(raw_documents)
+
         if not documents:
             collection_samples = self._collect_collection_documents(collection_names)
 
@@ -199,11 +191,181 @@ class MongoSessionRepository:
         for name in filtered_names:
             yield name
 
+    def _format_documents(
+        self, raw_documents: Sequence[tuple[str, dict[str, Any]]]
+    ) -> List[SessionDocument]:
+        if not raw_documents:
+            return []
+
+        sorted_documents = sorted(raw_documents, key=self._document_sort_key)
+        formatted: List[SessionDocument] = []
+        for source, document in sorted_documents:
+            formatted.append(self._to_session_document(source, document))
+        return formatted
+
+    def _document_sort_key(self, item: tuple[str, dict[str, Any]]) -> tuple[Any, ...]:
+        _, document = item
+        batch_index = self._coerce_int(document.get("batchIndex"))
+        timestamp = self._coerce_int(document.get("t")) or 0
+        request_rid = document.get("requestRid") or document.get("rid")
+        action_id = document.get("actionId")
+        identifier = request_rid or action_id or str(document.get("_id", ""))
+
+        if batch_index is not None:
+            return (0, batch_index, identifier)
+
+        return (1, timestamp, identifier)
+
+    def _to_session_document(self, source: str, document: dict[str, Any]) -> SessionDocument:
+        batch_index = self._coerce_int(document.get("batchIndex"))
+        request_rid = document.get("requestRid") or document.get("rid")
+        action_id = document.get("actionId")
+        data = document.get("data") if isinstance(document.get("data"), dict) else None
+        total_events = None
+        if data is not None:
+            total_raw = data.get("total")
+            total_events = self._coerce_int(total_raw)
+        events = data.get("events") if data is not None else None
+        event_preview, inferred_total = self._summarize_events(events)
+        if total_events is None:
+            total_events = inferred_total
+
+        header_parts = []
+        if batch_index is not None:
+            header_parts.append(f"Batch #{batch_index}")
+        if request_rid:
+            header_parts.append(f"requestRid={request_rid}")
+        if action_id:
+            header_parts.append(f"actionId={action_id}")
+        if total_events is not None:
+            header_parts.append(f"{total_events} event(s)")
+
+        header = " | ".join(header_parts) if header_parts else "Session document"
+
+        sanitized = self._stringify_document(document, prune_large_fields=True)
+
+        content_lines = [header]
+        if event_preview:
+            content_lines.append("Key events:")
+            content_lines.extend(f"- {line}" for line in event_preview)
+        content_lines.append(f"Details: {sanitized}")
+
+        return SessionDocument(
+            source=source,
+            content="\n".join(content_lines),
+            batch_index=batch_index,
+            total_events=total_events,
+            event_preview=event_preview,
+        )
+
+    def _summarize_events(
+        self, events: Any
+    ) -> tuple[List[str], int | None]:
+        if events is None:
+            return [], None
+
+        if isinstance(events, str):
+            stripped = events.strip()
+            if not stripped:
+                return [], None
+            if stripped[0] in "[{":
+                try:
+                    parsed = json_util.loads(stripped)
+                except (TypeError, ValueError):
+                    truncated = self._truncate_text(
+                        stripped, settings.session_event_preview_chars
+                    )
+                    return [truncated], None
+                else:
+                    # Prevent infinite recursion if parsing yields the same string.
+                    if isinstance(parsed, str) and parsed == events:
+                        truncated = self._truncate_text(
+                            stripped, settings.session_event_preview_chars
+                        )
+                        return [truncated], None
+                    return self._summarize_events(parsed)
+            truncated = self._truncate_text(stripped, settings.session_event_preview_chars)
+            return [truncated], None
+
+        if isinstance(events, list):
+            total = len(events)
+            preview_items = events[: settings.session_event_preview_count]
+            preview_lines = [self._describe_event(item) for item in preview_items]
+            if total > len(preview_items):
+                preview_lines.append(f"... {total - len(preview_items)} more event(s)")
+            return preview_lines, total
+
+        if isinstance(events, dict):
+            # Treat a dict payload as a single event snapshot.
+            return [self._describe_event(events)], 1
+
+        return [self._truncate_text(str(events), settings.session_event_preview_chars)], None
+
+    def _describe_event(self, event: Any) -> str:
+        if isinstance(event, dict):
+            flat_items = []
+            for key, value in event.items():
+                if isinstance(value, (dict, list)):
+                    continue
+                flat_items.append(f"{key}={value}")
+            if flat_items:
+                return ", ".join(flat_items)
+            serialized = json_util.dumps(event, ensure_ascii=False)
+            return self._truncate_text(serialized, settings.session_event_preview_chars)
+
+        if isinstance(event, str):
+            return self._truncate_text(event, settings.session_event_preview_chars)
+
+        serialized = json_util.dumps(event, ensure_ascii=False)
+        return self._truncate_text(serialized, settings.session_event_preview_chars)
+
     @staticmethod
-    def _stringify_document(document: dict) -> str:
-        clean_document = dict(document)
-        clean_document.pop("_id", None)
+    def _truncate_text(text: str, limit: int) -> str:
+        if len(text) <= limit:
+            return text
+        return text[: max(1, limit - 1)] + "…"
+
+    @staticmethod
+    def _coerce_int(value: Any) -> int | None:
+        if isinstance(value, bool):  # bool is subclass of int
+            return None
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _stringify_document(
+        document: dict, *, prune_large_fields: bool = False
+    ) -> str:
+        clean_document = MongoSessionRepository._sanitize_document(
+            document, prune_large_fields=prune_large_fields
+        )
         return json_util.dumps(clean_document, ensure_ascii=False)
+
+    @staticmethod
+    def _sanitize_document(
+        document: dict[str, Any], *, prune_large_fields: bool = False
+    ) -> dict[str, Any]:
+        clean_document: dict[str, Any] = dict(document)
+        clean_document.pop("_id", None)
+        if prune_large_fields:
+            data = clean_document.get("data")
+            if isinstance(data, dict) and "events" in data:
+                sanitized_data = dict(data)
+                events_value = sanitized_data.get("events")
+                if isinstance(events_value, list):
+                    sanitized_data["events"] = (
+                        f"<omitted {len(events_value)} event(s) for brevity>"
+                    )
+                elif events_value is not None:
+                    sanitized_data["events"] = "<omitted events for brevity>"
+                clean_document["data"] = sanitized_data
+        return clean_document
 
     @staticmethod
     def _build_query_from_fields(
