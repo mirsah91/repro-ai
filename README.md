@@ -22,6 +22,8 @@ pip install -e .
 - `MONGO_DB`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL` (defaults to `gpt-4o-mini` if omitted)
+- `SESSION_ID_FIELDS` (optional, comma-separated list of field names to search for a
+  session identifier; defaults to `sessionId,session_id`)
 
 3. Run the API server
 
