@@ -26,6 +26,10 @@ pip install -e .
   session identifier; defaults to `sessionId,session_id`). The repository automatically
   attempts to match identifiers stored as strings, MongoDB `ObjectId`s, or UUID values
   (including legacy binary encodings).
+- `SESSION_COLLECTIONS` (optional). Provide a comma-separated list of MongoDB collection
+  names (e.g. `traces,events`) to limit lookups to known sources instead of scanning every
+  collection in the database. This is useful when session data is consolidated in a
+  specific collection such as `traces`.
 - `ENABLE_SESSION_FALLBACK_SCAN` (optional, defaults to `true`). When enabled, each
   collection is opportunistically scanned for documents that contain the provided
   session identifier anywhere in the payload. This helps locate sessions where the ID

@@ -22,6 +22,7 @@ class SessionLookupResult:
     session_id: str
     documents: List[SessionDocument]
     session_id_fields: Tuple[str, ...]
+    requested_collections: Tuple[str, ...]
     candidate_values: Tuple[Any, ...]
     scanned_collections: Tuple[str, ...]
     matched_collections: Tuple[str, ...]
@@ -38,6 +39,7 @@ class MongoSessionRepository:
         self,
         client: MongoClient | None = None,
         session_id_fields: Sequence[str] | None = None,
+        session_collections: Sequence[str] | None = None,
     ) -> None:
         self._logger = logging.getLogger(__name__)
         self._uri_description = self._mask_uri(settings.mongo_uri)
@@ -53,6 +55,9 @@ class MongoSessionRepository:
         if session_id_fields is None:
             session_id_fields = settings.session_id_fields
         self._session_id_fields: tuple[str, ...] = tuple(session_id_fields)
+        if session_collections is None:
+            session_collections = settings.session_collections
+        self._session_collections: tuple[str, ...] = tuple(session_collections)
         self._connection_ok = self._check_connection()
 
     def fetch_session_documents(self, session_id: str) -> SessionLookupResult:
@@ -136,6 +141,7 @@ class MongoSessionRepository:
             session_id=session_id,
             documents=documents,
             session_id_fields=self._session_id_fields,
+            requested_collections=self._session_collections,
             candidate_values=candidate_values,
             scanned_collections=tuple(scanned_collections),
             matched_collections=tuple(sorted(matched_collections)),
@@ -153,6 +159,7 @@ class MongoSessionRepository:
         )
 
     def _iter_collection_names(self) -> Iterable[str]:
+        specified_collections = self._session_collections
         try:
             collection_names = self._db.list_collection_names()
         except PyMongoError:
@@ -161,12 +168,35 @@ class MongoSessionRepository:
                 self._uri_description,
                 self._db.name,
             )
+            if specified_collections:
+                self._logger.warning(
+                    "Falling back to configured session collections after list failure: %s",
+                    ", ".join(specified_collections),
+                )
+                for name in specified_collections:
+                    yield name
             return
 
-        for name in collection_names:
-            # system collections are ignored because they do not store business data
-            if name.startswith("system."):
-                continue
+        filtered_names = [
+            name for name in collection_names if not name.startswith("system.")
+        ]
+
+        if specified_collections:
+            missing = [
+                name for name in specified_collections if name not in filtered_names
+            ]
+            if missing:
+                self._logger.warning(
+                    "Configured session collections not found in database '%s': %s",
+                    self._db.name,
+                    ", ".join(missing),
+                )
+            for name in specified_collections:
+                if name in filtered_names:
+                    yield name
+            return
+
+        for name in filtered_names:
             yield name
 
     @staticmethod

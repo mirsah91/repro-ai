@@ -55,6 +55,7 @@ class SessionAIService:
         # Persist the most recent lookup metadata for debugging purposes.
         self._conversations.metadata[conversation_id] = {
             "lookup": {
+                "requested_collections": list(lookup.requested_collections),
                 "collections": list(lookup.scanned_collections),
                 "matched_collections": list(lookup.matched_collections),
             }
@@ -73,6 +74,7 @@ class SessionAIService:
                     "message": "Session not found",
                     "session_id": session_id,
                     "checked_fields": list(lookup.session_id_fields),
+                    "target_collections": list(lookup.requested_collections),
                     "candidate_values": [
                         self._repository.describe_candidate(candidate)
                         for candidate in lookup.candidate_values

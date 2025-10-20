@@ -6,6 +6,51 @@ from bson.objectid import ObjectId
 from app.services.database import MongoSessionRepository
 
 
+class _StubCollection:
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def find(self, *args, **kwargs):  # pragma: no cover - simple stub
+        return []
+
+    def estimated_document_count(self):  # pragma: no cover - simple stub
+        return 0
+
+
+class _StubDatabase:
+    def __init__(self, collections: dict[str, _StubCollection]) -> None:
+        self._collections = collections
+
+    def list_collection_names(self):
+        return list(self._collections.keys())
+
+    def __getitem__(self, name: str) -> _StubCollection:
+        return self._collections[name]
+
+    @property
+    def name(self) -> str:  # pragma: no cover - simple stub
+        return "test-db"
+
+
+class _StubAdmin:
+    @staticmethod
+    def command(cmd: str):  # pragma: no cover - simple stub
+        return {"ok": 1, "command": cmd}
+
+
+class _StubClient:
+    def __init__(self, collections: dict[str, _StubCollection]) -> None:
+        self._database = _StubDatabase(collections)
+        self.admin = _StubAdmin()
+
+    def __getitem__(self, name: str) -> _StubDatabase:
+        return self._database
+
+
 def test_build_query_from_fields_single_field():
     query = MongoSessionRepository._build_query_from_fields(
         "session-123", ["sessionId"]
@@ -88,3 +133,16 @@ def test_document_contains_session_matches_nested_values():
     )
 
     assert MongoSessionRepository._document_contains_session(document, candidates)
+
+
+def test_iter_collection_names_respects_configured_collections():
+    collections = {
+        "traces": _StubCollection("traces"),
+        "events": _StubCollection("events"),
+    }
+    repo = MongoSessionRepository(
+        client=_StubClient(collections),
+        session_collections=["traces"],
+    )
+
+    assert list(repo._iter_collection_names()) == ["traces"]
