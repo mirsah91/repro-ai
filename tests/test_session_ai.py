@@ -1,5 +1,6 @@
 from app.models.session import ChatMessage, SessionDocument
 from app.services.session_ai import SessionAIService
+from app.services.llm import LLMClient
 
 
 class FakeRepository:
@@ -84,4 +85,32 @@ def test_chat_returns_history_and_tracks_conversation_turns():
     assert [msg.model_dump() for msg in second.history][-2:] == [
         {"role": "user", "content": "Any errors?"},
         {"role": "assistant", "content": "answer-for-Any errors?"},
+    ]
+
+
+def test_llm_question_prompt_includes_conversation_history_section():
+    document = SessionDocument(source="traces", content="payload")
+    history_text = "User: First\nAssistant: Reply"
+
+    prompt = LLMClient._build_question_prompt(
+        "session-1", "Any updates?", [document], history_text
+    )
+
+    assert "Conversation so far:" in prompt
+    assert history_text in prompt
+
+
+def test_llm_format_conversation_history_renders_roles():
+    history = [
+        {"role": "user", "content": "What happened?"},
+        {"role": "assistant", "content": "Everything succeeded."},
+        {"role": "system", "content": "Internal note"},
+    ]
+
+    formatted = LLMClient._format_conversation_history(history)
+
+    assert formatted.split("\n") == [
+        "User: What happened?",
+        "Assistant: Everything succeeded.",
+        "System: Internal note",
     ]
