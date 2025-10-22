@@ -4,7 +4,12 @@ from typing import List
 
 from fastapi import HTTPException
 
-from app.models.session import SessionChatResponse, SessionDocument, SessionSummaryResponse
+from app.models.session import (
+    ChatMessage,
+    SessionChatResponse,
+    SessionDocument,
+    SessionSummaryResponse,
+)
 from app.services.conversation import ConversationStore
 from app.services.database import MongoSessionRepository, SessionLookupResult
 from app.services.llm import LLMClient
@@ -36,20 +41,28 @@ class SessionAIService:
     ) -> SessionChatResponse:
         documents, lookup = self._load_documents(session_id)
         if conversation_id:
-            history = self._conversations.get(conversation_id)
+            history_dicts = self._conversations.get(conversation_id)
         else:
             conversation_id = self._conversations.generate_id()
-            history = []
+            history_dicts = []
 
-        answer = self._llm.answer_question(session_id, question, documents, history)
+        answer = self._llm.answer_question(
+            session_id, question, documents, history_dicts
+        )
         self._conversations.append(conversation_id, "user", question)
         self._conversations.append(conversation_id, "assistant", answer)
+
+        full_history = [
+            ChatMessage(**message)
+            for message in self._conversations.get(conversation_id)
+        ]
 
         response = SessionChatResponse(
             session_id=session_id,
             answer=answer,
             used_documents=documents,
             conversation_id=conversation_id,
+            history=full_history,
         )
 
         # Persist the most recent lookup metadata for debugging purposes.

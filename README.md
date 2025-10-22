@@ -6,6 +6,9 @@ AI service providing session summarization and conversational insights over Mong
 
 - Summarize a session across multiple MongoDB collections using a single endpoint.
 - Conversational interface that answers arbitrary questions about the session data.
+- Chat endpoint maintains conversation history, returning a `conversation_id` and the
+  full transcript so clients can continue multi-turn investigations with minimal
+  state management.
 - Automatically orders batched trace documents by `batchIndex`, merges them into a
   chronological view, and condenses oversized event payloads before handing them to the LLM.
 - Modular design that separates data access, orchestration, and language model integrations.
@@ -55,6 +58,35 @@ uvicorn app.main:app --reload
 ```
 
 The interactive API docs are available at `http://localhost:8000/docs`.
+
+### Chatting with history
+
+Send a POST request to `/sessions/{sessionId}/chat` with a natural language
+question. The response includes a `conversation_id` along with the ordered chat
+`history`. Reuse the `conversation_id` on subsequent requests to continue the
+same dialogue and keep prior turns in context.
+
+```bash
+curl -X POST \
+  http://localhost:8000/sessions/<session-id>/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "question": "Were there any authentication errors?"
+      }'
+```
+
+To continue the conversation, include the `conversation_id` that the previous
+response returned:
+
+```bash
+curl -X POST \
+  http://localhost:8000/sessions/<session-id>/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "question": "How long did the login take?",
+        "conversation_id": "<conversation-id>"
+      }'
+```
 
 ### Handling large batched traces
 

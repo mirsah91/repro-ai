@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +24,11 @@ class SessionDocument(BaseModel):
     )
 
 
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant", "system"]
+    content: str
+
+
 class SessionSummaryResponse(BaseModel):
     session_id: str
     summary: str
@@ -45,3 +50,6 @@ class SessionChatResponse(BaseModel):
     answer: str
     used_documents: List[SessionDocument]
     conversation_id: str
+    history: List[ChatMessage] = Field(
+        ..., description="Ordered transcript of the conversation including this turn"
+    )
